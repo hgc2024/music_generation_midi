@@ -6,7 +6,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from preprocess import MidiPreprocessor
 from feature_extraction import MidiFeatureExtractor
 from train import MidiDataset, MusicTransformer, Trainer
-from huggingface_hub import hf_hub_download
 
 def test_train():
     model = MusicTransformer(input_dim=128, output_dim=128)

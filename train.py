@@ -59,9 +59,13 @@ class Trainer:
 
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
-
+        
+        # Track best model performance
+        best_f1 = 0.0
+        
         for epoch in range(self.epochs):
             self.model.train()
+            total_loss = 0
             for features, labels in train_loader:
                 # Move data to GPU if available
                 features = features.to(self.device)
@@ -72,9 +76,18 @@ class Trainer:
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-            # Evaluate the model
-            self.evaluate(test_loader)
-            print(f"Epoch {epoch + 1}, Loss: {loss.item()}")
+                total_loss += loss.item()
+            
+            # Evaluate the model at the end of each epoch
+            accuracy, f1 = self.evaluate(test_loader)
+            avg_loss = total_loss / len(train_loader)
+            print(f"Epoch {epoch + 1}, Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}, F1 Score: {f1:.4f}")
+            
+            # Save the model only if it's the best so far
+            if f1 > best_f1:
+                best_f1 = f1
+                torch.save(self.model.state_dict(), f"best_model_f1_{f1:.4f}.pt")
+                print(f"Saved new best model with F1 score: {f1:.4f}")
 
     def evaluate(self, dataloader):
         self.model.eval()
@@ -94,5 +107,4 @@ class Trainer:
             
         accuracy = accuracy_score(y_true, y_pred)
         f1 = f1_score(y_true, y_pred, average='weighted')
-        print(f"Accuracy: {accuracy}, F1 Score: {f1}")
         return accuracy, f1
