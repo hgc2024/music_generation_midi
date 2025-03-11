@@ -5,22 +5,26 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from preprocess import MidiPreprocessor
 from feature_extraction import MidiFeatureExtractor
-from train import MidiDataset, MusicTransformer, Trainer
+from train import MidiDataset, MusicRNN, Trainer
 
 def test_train():
-    # Make sure these parameters match the MusicTransformer definition in train.py
-    model = MusicTransformer(input_dim=128, output_dim=428)
+    # Initialize the model - adjust parameters based on actual MusicRNN implementation
+    input_dim = 128
+    output_dim = 128 + 300  # Notes + duration values
+    hidden_dim = 256
+    
+    model = MusicRNN(
+        input_dim=input_dim, 
+        output_dim=output_dim,
+        hidden_dim=hidden_dim,
+    )
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
-    # Data loading code remains the same...
-    preprocessor = MidiPreprocessor()
-    midi_directory = r"C:\Users\henry-cao-local\Desktop\Personal_Projects\Music_Generation\data"
+    # Data preparation
     midi_processed = r"C:\Users\henry-cao-local\Desktop\Personal_Projects\Music_Generation\music_generation_midi\processed_midi"
-
-    extractor = MidiFeatureExtractor()
     
-    # Data loading section remains unchanged
     all_piano_rolls = []
     all_durations = []
     all_chords = []
@@ -43,51 +47,36 @@ def test_train():
                     all_chords.append(chords)
     
     if all_piano_rolls:
+        print(f"Loaded {len(all_piano_rolls)} sequences")
         print(f"Dimensions of piano rolls: {all_piano_rolls[0].shape}")
         print(f"Dimensions of durations: {all_durations[0].shape if all_durations else None}")
         print(f"Dimensions of chords: {all_chords[0].shape if all_chords else None}")
 
-        # Create dataset - make sure this matches MidiDataset's constructor parameters
-        dataset = MidiDataset(all_piano_rolls, all_durations, all_chords)
+        # Create dataset with appropriate parameters
+        sequence_length = 64  # Adjust based on actual requirements
+        dataset = MidiDataset(
+            features=all_piano_rolls,
+            labels=all_durations,
+            midi_files=all_chords
+        )
         
-        # Set up training parameters
+        # Training parameters
         batch_size = 16
         learning_rate = 1e-4
         num_epochs = 50
         
-        # Initialize trainer - make sure parameters match Trainer's constructor
+        # Initialize trainer with appropriate parameters
         trainer = Trainer(
-            dataset=dataset,
             model=model,
-            epochs=num_epochs,
+            dataset=dataset,
             batch_size=batch_size,
             learning_rate=learning_rate,
+            epochs=num_epochs,
             device=device
         )
         
-        # Train the model - ensure train method accepts num_epochs
+        # Run training
         trainer.train()
-
-        # # Save the trained model
-        # # Create models directory if it doesn't exist
-        # models_dir = os.path.join(r"C:\Users\henry-cao-local\Desktop\Personal_Projects\Music_Generation\music_generation_midi\models")
-        # os.makedirs(models_dir, exist_ok=True)
-        
-        # # Find the highest existing version number
-        # version = 1
-        # for file in os.listdir(models_dir):
-        #     if file.startswith("music_transformer_v") and file.endswith(".pth"):
-        #         try:
-        #             v = int(file.split("_v")[1].split(".")[0])
-        #             version = max(version, v + 1)
-        #         except:
-        #             pass
-                
-        # # Create a unique model path with version number
-        # model_path = os.path.join(models_dir, f"music_transformer_v{version}.pth")
-        # print(f"Saving model to {model_path}")
-        # os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        # torch.save(model.state_dict(), model_path)
     else:
         print("No data files found. Please check the processed_midi directory.")
 

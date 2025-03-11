@@ -55,9 +55,9 @@ class MidiDataset(Dataset):
 
         return feature, label
     
-class MusicTransformer(nn.Module):
-    def __init__(self, input_dim=None, output_dim=None, num_layers=6, num_heads=8, hidden_dim=512):
-        super(MusicTransformer, self).__init__()
+class MusicRNN(nn.Module):
+    def __init__(self, input_dim=None, output_dim=None, hidden_dim=128):
+        super(MusicRNN, self).__init__()
         
         # If dimensions not provided, use defaults from feature_extraction
         if input_dim is None:
@@ -65,17 +65,20 @@ class MusicTransformer(nn.Module):
         if output_dim is None:
             output_dim = feature_extraction.get_num_classes()
             
-        self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=input_dim,
-            nhead=num_heads
+        self.lstm = nn.LSTM(
+            input_size=input_dim,
+            hidden_size=hidden_dim,
+            num_layers=2,
+            batch_first=True,
+            dropout=0.2
         )
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
-        self.fc = nn.Linear(input_dim, output_dim)
+        self.fc = nn.Linear(hidden_dim, output_dim)
     
     def forward(self, x):
-        x = self.transformer_encoder(x)
-        x = self.fc(x)
-        return x
+        # x shape: [batch, seq_len, features]
+        lstm_out, _ = self.lstm(x)
+        output = self.fc(lstm_out)
+        return output
     
 class Trainer:
     def __init__(self, dataset=None, model=None, midi_files=None, epochs=10, batch_size=32, learning_rate=0.001, device=None):
@@ -87,7 +90,7 @@ class Trainer:
             if model is None:
                 input_dim = feature_extraction.get_feature_dim()
                 output_dim = feature_extraction.get_num_classes()
-                self.model = MusicTransformer(input_dim=input_dim, output_dim=output_dim)
+                self.model = MusicRNN(input_dim=input_dim, output_dim=output_dim)
         else:
             self.dataset = dataset
             self.model = model
@@ -118,8 +121,6 @@ class Trainer:
         return features, labels
 
     def train(self):
-        # Import tqdm for progress bar
-        
         # Need to split the dataset into training, testing, and validation sets
         features = self.dataset.features
         labels = self.dataset.labels
@@ -134,15 +135,11 @@ class Trainer:
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         
-        # Add batch normalization layer
-        batch_norm = nn.BatchNorm1d(self.model.fc.in_features).to(self.device)
-        
         # Track best model performance
         best_f1 = 0
         
         for epoch in range(self.epochs):
             self.model.train()
-            batch_norm.train()  # Set batch norm to training mode
             total_loss = 0
             
             # Create progress bar for training loop
@@ -153,25 +150,13 @@ class Trainer:
                 features = features.to(self.device)
                 labels = labels.to(self.device)
                 
-                # Forward pass through transformer
-                x = self.model.transformer_encoder(features)
-                
-                # Apply batch normalization before the final layer
-                x_reshaped = x.permute(0, 2, 1)
-                x_normalized = batch_norm(x_reshaped)
-                x = x_normalized.permute(0, 2, 1)  # Reshape back
-                
-                # Final classification layer
-                outputs = self.model.fc(x)
-
-                # print(f"Features shape: {features.shape}, Labels shape: {labels.shape}")
-                # print(f"Model output shape: {outputs.shape}")
-                # print(f"Min label value: {labels.min().item()}, Max label value: {labels.max().item()}")
+                # Forward pass through RNN
+                outputs = self.model(features)
 
                 loss = criterion(outputs.transpose(1, 2), labels)
                 optimizer.zero_grad()
                 loss.backward()
-                # Add gradient clipping to train.py
+                # Add gradient clipping
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 optimizer.step()
                 total_loss += loss.item()
@@ -180,7 +165,6 @@ class Trainer:
                 progress_bar.set_postfix({"batch_loss": f"{loss.item():.4f}"})
             
             # Evaluate the model at the end of each epoch
-            batch_norm.eval()  # Set batch norm to evaluation mode
             print("Evaluating model...")
             f1 = self.evaluate(test_loader)
             avg_loss = total_loss / len(train_loader)
@@ -212,10 +196,9 @@ class Trainer:
                 # Create a unique model path with version number
                 model_path = os.path.join(models_dir, f"model_v{self.model_version}.pt")
                 
-                # Save model and batch norm state dictionaries
+                # Save model state dictionary
                 torch.save({
                     'model_state_dict': self.model.state_dict(),
-                    'batch_norm_state_dict': batch_norm.state_dict()
                 }, model_path)
                 
                 print(f"✓ Saved new best model with note accuracy: {best_f1:.4f} to {model_path}")
