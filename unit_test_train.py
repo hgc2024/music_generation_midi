@@ -6,9 +6,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from preprocess import MidiPreprocessor
 from feature_extraction import MidiFeatureExtractor
 from train import MidiDataset, MusicTransformer, Trainer
+from huggingface_hub import hf_hub_download
 
 def test_train():
-    model_name = "skytnt/midi-composer"
+    model_base_path = hf_hub_download(repo_id="skytnt/midi-model-tv2o-medium", filename="onnx/model_base.onnx")
+    model_token_path = hf_hub_download(repo_id="skytnt/midi-model-tv2o-medium", filename="onnx/model_token.onnx")
+    tokenizer_config_path = hf_hub_download(repo_id="skytnt/midi-model-tv2o-medium", filename="config.json")
+
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name)
     device = "cuda" if torch.cuda.is_available() else "cpu"
