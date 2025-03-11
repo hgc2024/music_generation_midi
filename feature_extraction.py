@@ -31,7 +31,7 @@ class MidiFeatureExtractor:
             durations.append(timings[i + 1] - timings[i])
         return np.array(durations)
     
-    def extract_chort_sequences(self, notes, window_size=4):
+    def extract_chord_sequences(self, notes, window_size=4):
         """
         Extract sequences of chords from the MIDI data.
         """
