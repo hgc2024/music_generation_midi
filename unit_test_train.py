@@ -51,7 +51,7 @@ def test_train():
         dataset = MidiDataset(all_piano_rolls, all_durations, all_chords)
         
         # Set up training parameters
-        batch_size = 16
+        batch_size = 8
         learning_rate = 1e-4
         num_epochs = 50
         
