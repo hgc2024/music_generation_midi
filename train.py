@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score
@@ -56,7 +57,8 @@ class MidiDataset(Dataset):
         return feature, label
     
 class MusicTransformer(nn.Module):
-    def __init__(self, input_dim=None, output_dim=None, num_layers=6, num_heads=8, hidden_dim=512):
+    def __init__(self, input_dim=None, output_dim=None, num_layers=6, num_heads=8, hidden_dim=512, 
+                 dropout=0.1, use_relative_attention=True):
         super(MusicTransformer, self).__init__()
         
         # If dimensions not provided, use defaults from feature_extraction
@@ -65,16 +67,52 @@ class MusicTransformer(nn.Module):
         if output_dim is None:
             output_dim = feature_extraction.get_num_classes()
             
-        self.encoder_layer = nn.TransformerEncoderLayer(
-            d_model=input_dim,
-            nhead=num_heads
-        )
-        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
-        self.fc = nn.Linear(input_dim, output_dim)
+        self.input_dim = input_dim
+        self.embedding = nn.Linear(input_dim, hidden_dim)
+        
+        # Positional encoding for better time awareness
+        self.pos_encoder = nn.Parameter(torch.zeros(1, 5000, hidden_dim))
+        
+        # Custom transformer layers with relative attention if enabled
+        encoder_layers = []
+        for _ in range(num_layers):
+            encoder_layers.append(
+                nn.TransformerEncoderLayer(
+                    d_model=hidden_dim, 
+                    nhead=num_heads,
+                    dropout=dropout,
+                    batch_first=True
+                )
+            )
+        self.transformer_encoder = nn.ModuleList(encoder_layers)
+        
+        # Multi-level prediction heads for better feature extraction
+        self.fc_intermediate = nn.Linear(hidden_dim, hidden_dim)
+        self.layer_norm = nn.LayerNorm(hidden_dim)
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(hidden_dim, output_dim)
     
     def forward(self, x):
-        x = self.transformer_encoder(x)
+        # Shape: [batch, seq_len, features]
+        seq_len = x.size(1)
+        
+        # Project to hidden dimension
+        x = self.embedding(x)
+        
+        # Add positional encoding
+        x = x + self.pos_encoder[:, :seq_len, :]
+        
+        # Apply transformer layers sequentially with residual connections
+        for layer in self.transformer_encoder:
+            x = layer(x)
+            
+        # Apply final prediction layers
+        x = self.fc_intermediate(x)
+        x = F.gelu(x)
+        x = self.layer_norm(x)
+        x = self.dropout(x)
         x = self.fc(x)
+        
         return x
     
 class Trainer:
@@ -198,26 +236,26 @@ class Trainer:
                 models_dir = os.path.join(r"C:\Users\henry-cao-local\Desktop\Personal_Projects\Music_Generation\music_generation_midi\models")
                 os.makedirs(models_dir, exist_ok=True)
                 
-                # Find the highest existing version number
-                version = 1
-                for file in os.listdir(models_dir):
-                    if file.startswith("model_v") and file.endswith(".pt"):
-                        try:
-                            v = int(file.split("_v")[1].split(".")[0])
-                            version = max(version, v + 1)
-                        except:
-                            pass
-                
-                # Create a unique model path with version number
-                model_path = os.path.join(models_dir, f"model_v{version}.pt")
+                # Use the same model path throughout this training run
+                if not hasattr(self, 'model_path'):
+                    # Find the highest existing version number only once
+                    version = 1
+                    for file in os.listdir(models_dir):
+                        if file.startswith("model_v") and file.endswith(".pt"):
+                            try:
+                                v = int(file.split("_v")[1].split(".")[0])
+                                version = max(version, v + 1)
+                            except:
+                                pass
+                    self.model_path = os.path.join(models_dir, f"music_transformer_v{version}.pth")
                 
                 # Save model and batch norm state dictionaries
                 torch.save({
                     'model_state_dict': self.model.state_dict(),
                     'batch_norm_state_dict': batch_norm.state_dict()
-                }, model_path)
+                }, self.model_path)
                 
-                print(f"✓ Saved new best model with note accuracy: {best_note_accuracy:.4f} to {model_path}")
+                print(f"✓ Saved new best model with note accuracy: {best_note_accuracy:.4f} to {self.model_path}")
 
     def evaluate(self, test_loader):
         self.model.eval()
