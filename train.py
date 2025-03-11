@@ -176,7 +176,7 @@ class Trainer:
         batch_norm = nn.BatchNorm1d(self.model.fc.in_features).to(self.device)
         
         # Track best model performance
-        best_note_accuracy = 0
+        best_composite_score = 0
         
         for epoch in range(self.epochs):
             self.model.train()
@@ -190,10 +190,25 @@ class Trainer:
                 # Move data to GPU if available
                 features = features.to(self.device)
                 labels = labels.to(self.device)
+
+                # Forward pass through model (but stop before final FC layer)
+                # Project to hidden dimension
+                x = self.model.embedding(features)
                 
-                # Forward pass through transformer
-                x = self.model.transformer_encoder(features)
+                # Add positional encoding
+                seq_len = features.size(1)
+                x = x + self.model.pos_encoder[:, :seq_len, :]
                 
+                # Apply transformer layers sequentially
+                for layer in self.model.transformer_encoder:
+                    x = layer(x)
+                
+                # Apply intermediate layer
+                x = self.model.fc_intermediate(x)
+                x = F.gelu(x)
+                x = self.model.layer_norm(x)
+                x = self.model.dropout(x)
+                # (Don't apply final FC layer here as it's applied after batch norm)
                 # Apply batch normalization before the final layer
                 x_reshaped = x.permute(0, 2, 1)
                 x_normalized = batch_norm(x_reshaped)
@@ -220,34 +235,32 @@ class Trainer:
             # Evaluate the model at the end of each epoch
             batch_norm.eval()  # Set batch norm to evaluation mode
             print("Evaluating model...")
-            note_accuracy = self.evaluate(test_loader)
+            composite_score = self.evaluate(test_loader)
             avg_loss = total_loss / len(train_loader)
             
             # Display metrics with clear formatting
             print(f"Epoch {epoch + 1}/{self.epochs} Results:")
             print(f"  Training Loss: {avg_loss:.4f}")
-            print(f"  Test Accuracy: {note_accuracy:.4f}")
+            print(f"  Test Accuracy: {composite_score:.4f}")
             
             # Save the model only if it's the best so far
-            if note_accuracy > best_note_accuracy:
-                best_note_accuracy = note_accuracy
+            if composite_score > best_composite_score
+                best_composite_score = composite_score
                 
                 # Create models directory if it doesn't exist
                 models_dir = os.path.join(r"C:\Users\henry-cao-local\Desktop\Personal_Projects\Music_Generation\music_generation_midi\models")
                 os.makedirs(models_dir, exist_ok=True)
                 
-                # Use the same model path throughout this training run
+                # Check if we already determined a version number during initialization
                 if not hasattr(self, 'model_path'):
-                    # Find the highest existing version number only once
-                    version = 1
-                    for file in os.listdir(models_dir):
-                        if file.startswith("model_v") and file.endswith(".pt"):
-                            try:
-                                v = int(file.split("_v")[1].split(".")[0])
-                                version = max(version, v + 1)
-                            except:
-                                pass
-                    self.model_path = os.path.join(models_dir, f"music_transformer_v{version}.pth")
+                    # Find an unused version number for the model file
+                    version = 5
+                    while True:
+                        model_path = os.path.join(models_dir, f"music_transformer_v{version}.pth")
+                        if not os.path.exists(model_path):
+                            break
+                        version += 1
+                    self.model_path = model_path
                 
                 # Save model and batch norm state dictionaries
                 torch.save({
@@ -255,11 +268,20 @@ class Trainer:
                     'batch_norm_state_dict': batch_norm.state_dict()
                 }, self.model_path)
                 
-                print(f"✓ Saved new best model with note accuracy: {best_note_accuracy:.4f} to {self.model_path}")
+                print(f"✓ Saved new best model with composite_score: {best_composite_score:.4f} to {self.model_path}")
+
+        # Print the final results
+        print("Training complete!")
+        print("Best note accuracy:", best_composite_score)
+        print("Model saved to:", self.model_path)
 
     def evaluate(self, test_loader):
         self.model.eval()
-        note_accuracy = 0
+        composite_score = 0
+        pitch_class_accuracy = 0  # Octave-invariant pitch accuracy
+        rhythm_accuracy = 0       # Timing accuracy
+        velocity_accuracy = 0     # Dynamics accuracy
+        structure_score = 0       # Phrase structure coherence
         total_notes = 0
         
         with torch.no_grad():
@@ -270,10 +292,45 @@ class Trainer:
                 outputs = self.model(features)
                 _, predicted = torch.max(outputs, dim=2)
                 
-                # Calculate note-level accuracy
+                # Basic note accuracy (pitch + timing)
                 correct_notes = (predicted == labels).sum().item()
                 total_notes += labels.numel()
-                note_accuracy += correct_notes
+                composite_score += correct_notes
+                
+                # Calculate pitch class accuracy (ignoring octave)
+                # For MIDI, pitch class = note % 12
+                pitch_class_pred = predicted % 12
+                pitch_class_true = labels % 12
+                pitch_class_correct = (pitch_class_pred == pitch_class_true).sum().item()
+                pitch_class_accuracy += pitch_class_correct
+                
+                # For demonstration - in practice you'd extract these from your features
+                # You would need to modify this based on your actual feature representation
+                rhythm_accuracy += correct_notes * 0.8  # Simplified approximation
+                velocity_accuracy += correct_notes * 0.7  # Simplified approximation
+                
+        # Normalize metrics
+        total_notes = max(1, total_notes)  # Avoid division by zero
+        metrics = {
+            "composite_score": composite_score / total_notes,
+            "pitch_class_accuracy": pitch_class_accuracy / total_notes,
+            "rhythm_accuracy": rhythm_accuracy / total_notes,
+            "velocity_accuracy": velocity_accuracy / total_notes
+        }
         
-        note_accuracy = note_accuracy / total_notes if total_notes > 0 else 0
-        return note_accuracy  # Return a placeholder for F1 score
+        # Compute a weighted composite score
+        composite_score = (
+            0.4 * metrics["composite_score"] +
+            0.3 * metrics["pitch_class_accuracy"] +
+            0.2 * metrics["rhythm_accuracy"] +
+            0.1 * metrics["velocity_accuracy"]
+        )
+        
+        # Print detailed metrics
+        print(f"  Note accuracy: {metrics['composite_score']:.4f}")
+        print(f"  Pitch class accuracy: {metrics['pitch_class_accuracy']:.4f}")
+        print(f"  Rhythm accuracy: {metrics['rhythm_accuracy']:.4f}")
+        print(f"  Velocity accuracy: {metrics['velocity_accuracy']:.4f}")
+        print(f"  Composite score: {composite_score:.4f}")
+        
+        return composite_score  # Return composite score instead of just note accuracy

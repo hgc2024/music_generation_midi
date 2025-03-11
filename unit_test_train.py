@@ -53,7 +53,7 @@ def test_train():
         # Set up training parameters
         batch_size = 16
         learning_rate = 1e-4
-        num_epochs = 5
+        num_epochs = 50
         
         # Initialize trainer - make sure parameters match Trainer's constructor
         trainer = Trainer(
