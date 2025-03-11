@@ -9,7 +9,7 @@ from train import MidiDataset, MusicTransformer, Trainer
 
 def test_train():
     # Make sure these parameters match the MusicTransformer definition in train.py
-    model = MusicTransformer(input_dim=128, output_dim=128)
+    model = MusicTransformer(input_dim=128, output_dim=428)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
