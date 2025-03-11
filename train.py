@@ -281,70 +281,57 @@ class MultiHeadAttentionWithRelPos(nn.Module):
         """
         batch_size, seq_len, _ = x.shape
         
-        # 1. Linear projections for query, key, value
+        # Linear projections
         q = self.query(x)  # [batch_size, seq_len, d_model]
         k = self.key(x)    # [batch_size, seq_len, d_model]
         v = self.value(x)  # [batch_size, seq_len, d_model]
         
-        # 2. Reshape to separate heads
-        q = q.view(batch_size, seq_len, self.nhead, self.head_dim)  # [batch, seq, head, dim]
-        k = k.view(batch_size, seq_len, self.nhead, self.head_dim)  # [batch, seq, head, dim]
-        v = v.view(batch_size, seq_len, self.nhead, self.head_dim)  # [batch, seq, head, dim]
+        # Reshape for multi-head attention
+        q = q.view(batch_size, seq_len, self.nhead, self.head_dim)
+        k = k.view(batch_size, seq_len, self.nhead, self.head_dim)
+        v = v.view(batch_size, seq_len, self.nhead, self.head_dim)
         
-        # 3. Transpose for attention calculation
-        q = q.transpose(1, 2)  # [batch, head, seq, dim]
-        k = k.transpose(1, 2)  # [batch, head, seq, dim]
-        v = v.transpose(1, 2)  # [batch, head, seq, dim]
+        # Transpose for attention calc
+        q = q.permute(0, 2, 1, 3)  # [batch, head, seq, dim]
+        k = k.permute(0, 2, 1, 3)  # [batch, head, seq, dim]
+        v = v.permute(0, 2, 1, 3)  # [batch, head, seq, dim]
         
-        # 4. Calculate attention scores
-        scores = torch.matmul(q, k.transpose(-2, -1))  # [batch, head, seq, seq]
+        # Calculate regular attention scores
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         
-        # 5. Add relative positional encoding (if enabled)
+        # Simplified relative position bias 
         if self.use_rel_pos:
-            # Ensure we don't exceed max_seq_length
-            rel_pos = self.rel_pos_encoding[:seq_len, :self.d_model]
+            # Just use a fixed relative position bias matrix
+            if not hasattr(self, 'rel_pos_bias') or self.rel_pos_bias.size(0) < seq_len:
+                # Create a bias matrix of appropriate size
+                rel_pos_bias = torch.zeros(seq_len, seq_len, device=x.device)
+                positions = torch.arange(seq_len, device=x.device)
+                distances = positions.unsqueeze(1) - positions.unsqueeze(0)
+                
+                # Simple distance-based bias
+                rel_pos_bias = -0.5 * torch.abs(distances).float() / seq_len
+                
+                # Save as buffer
+                self.register_buffer('rel_pos_bias', rel_pos_bias)
             
-            # Project positional encoding to key space
-            rel_pos_k = rel_pos.view(seq_len, self.nhead, self.head_dim)  # [seq, head, dim]
-            rel_pos_k = rel_pos_k.transpose(0, 1)  # [head, seq, dim]
-            
-            # For each head and position i, compute attention scores with all other positions
-            rel_scores = torch.zeros(batch_size, self.nhead, seq_len, seq_len, device=x.device)
-            
-            for b in range(batch_size):
-                for h in range(self.nhead):
-                    # Calculate relative position scores efficiently
-                    q_b_h = q[b, h]  # [seq, dim]
-                    pos_k_h = rel_pos_k[h]  # [seq, dim]
-                    
-                    # Calculate scores between each query position and all possible relative positions
-                    for i in range(seq_len):
-                        # This computes the attention score between position i and all other positions
-                        for j in range(seq_len):
-                            # Relative distance
-                            rel_dist = i - j + seq_len - 1  # Shift to ensure positive index
-                            if rel_dist < seq_len:
-                                rel_scores[b, h, i, j] = torch.dot(q_b_h[i], pos_k_h[rel_dist % seq_len])
-            
-            # Add relative position scores to attention scores
-            scores = scores + rel_scores
+            # Add positional bias to attention scores
+            rel_pos = self.rel_pos_bias[:seq_len, :seq_len]
+            # Add to all batches and heads
+            attn_scores = attn_scores + rel_pos.unsqueeze(0).unsqueeze(0)
         
-        # 6. Scale attention scores
-        scores = scores / math.sqrt(self.head_dim)
-        
-        # 7. Apply softmax to get attention weights
-        attn_weights = F.softmax(scores, dim=-1)  # [batch, head, seq, seq]
+        # Apply softmax to get attention weights
+        attn_weights = F.softmax(attn_scores, dim=-1)  # [batch, head, seq, seq]
         attn_weights = self.dropout(attn_weights)
         
-        # 8. Apply attention weights to values
+        # Apply attention weights to values
         attn_output = torch.matmul(attn_weights, v)  # [batch, head, seq, dim]
         
-        # 9. Transpose and reshape attention output
-        attn_output = attn_output.transpose(1, 2)  # [batch, seq, head, dim]
-        attn_output = attn_output.reshape(batch_size, seq_len, self.d_model)  # [batch, seq, d_model]
+        # Reshape back
+        attn_output = attn_output.permute(0, 2, 1, 3).contiguous()
+        attn_output = attn_output.view(batch_size, seq_len, self.d_model)
         
-        # 10. Apply output projection
-        output = self.out_proj(attn_output)  # [batch, seq, d_model]
+        # Final projection
+        output = self.out_proj(attn_output)
         
         return output
 
@@ -436,6 +423,11 @@ class Trainer:
     
     def train(self):
         """Train the model for specified number of epochs."""
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"GPU device: {torch.cuda.get_device_name(0)}")
+            print(f"GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        
         for epoch in range(1, self.epochs + 1):
             # Training phase
             self.model.train()
@@ -467,12 +459,37 @@ class Trainer:
                     
                     # Prepare outputs and labels for loss calculation
                     # For CrossEntropyLoss with sequence data, reshape:
+                    self.criterion = nn.BCEWithLogitsLoss()
+
+                    # In the train method:
                     batch_size, seq_len, output_dim = outputs.shape
-                    outputs = outputs.view(-1, output_dim)  # [batch*seq_len, output_dim]
-                    labels = labels.view(-1)  # [batch*seq_len]
-                    
-                    # Calculate loss
-                    loss = self.criterion(outputs, labels)
+                    outputs_reshaped = outputs.view(-1, output_dim)  # [batch*seq, features]
+
+                    # Reshape labels to match outputs exactly
+                    if len(labels.shape) == 3:  # [batch, seq, features]
+                        labels_reshaped = labels.view(-1, output_dim)  # [batch*seq, features]
+                    elif labels.size() == torch.Size([batch_size * seq_len * output_dim]):
+                        # If labels are already flattened
+                        labels_reshaped = labels.view(-1, output_dim)  # [batch*seq, features]
+                    else:
+                        # Just reshape as best we can
+                        labels_reshaped = labels.view(-1)
+                        
+                        # If using binary loss, one-hot encode if needed
+                        if isinstance(self.criterion, nn.BCEWithLogitsLoss):
+                            if labels_reshaped.dim() == 1:
+                                # Convert class indices to one-hot
+                                labels_one_hot = torch.zeros(
+                                    labels_reshaped.size(0), output_dim, 
+                                    device=labels.device
+                                )
+                                labels_one_hot.scatter_(1, labels_reshaped.unsqueeze(1), 1)
+                                labels_reshaped = labels_one_hot
+
+                    labels_reshaped = labels_reshaped.float()  # Ensure float for BCE loss
+
+                    # Now use the properly reshaped labels    
+                    loss = self.criterion(outputs_reshaped, labels_reshaped)
                     
                     # Check loss validity
                     if torch.isnan(loss) or torch.isinf(loss):

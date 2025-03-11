@@ -9,7 +9,7 @@ from train import MidiDataset, MusicTransformer, Trainer
 
 def test_train():
     # Make sure these parameters match the MusicTransformer definition in train.py
-    model = MusicTransformer(input_dim=128, output_dim=428)
+    model = MusicTransformer(input_dim=128, output_dim=128)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
@@ -51,7 +51,7 @@ def test_train():
         dataset = MidiDataset(all_piano_rolls, all_durations, all_chords)
         
         # Set up training parameters
-        batch_size = 8
+        batch_size = 16
         learning_rate = 1e-4
         num_epochs = 50
         
